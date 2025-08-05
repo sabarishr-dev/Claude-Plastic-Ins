@@ -1,0 +1,100 @@
+Rule: Plastic SCM / Unity VCS CLI Workflow
+
+Standard CLI workflow to track, review, and check in changes with proper commit messages.
+
+---
+
+1. Check Current Branch & Status  
+   Command:  
+   cm status  
+   - Shows current branch and pending local changes.  
+   - If CLI is not installed, return Plastic SCM download link.
+
+2. View All Workspace Changes  
+   Command:  
+   cm status --all  
+   - Lists added, modified, deleted, and moved files.  
+
+   To see diffs:  
+   cm diff
+
+3. Check for Incoming Changes Before Commit  
+   Command:  
+   cm status --incoming  
+   - If incoming changes are detected, ask the user:
+
+     "Incoming changes found. Do you want to pull them before committing? (yes/no)"
+
+   - If user agrees:  
+     cm update  
+   - If user cancels: skip update and proceed cautiously.
+
+4. Preview Changes Before Commit  
+   Command:  
+   cm diff  
+   - Review all file differences before committing.
+
+   Optional: Undo all local changes  
+   cm undo .
+
+5. Commit Changes with Proper Comment  
+   Prompt user:
+
+   ➤ Enter commit **type** (e.g. feat, fix, refactor, docs, chore):  
+   ➤ Enter a **short summary** of the change:  
+   ➤ Enter a **detailed description** (optional, press Enter to skip):
+
+   → Construct commit message as:  
+   <type>: <short summary>  
+
+   <detailed description>
+
+   Show constructed message and ask:
+
+   "Commit message preview:  
+   ------------------------  
+   <type>: <short summary>  
+
+   <detailed description>  
+
+   Do you want to proceed with this commit? (yes/no)"
+
+   - If yes:  
+     cm ci -c="<final commit message>"
+
+   - If no:  
+     Prompt to **edit** the commit message (type, summary, or description), then re-confirm.
+
+6. Example Full Workflow  
+   cm status  
+   cm status --all  
+   cm status --incoming  
+   # ask to pull if necessary  
+   cm diff  
+   # prompt for commit message  
+   cm ci -c="fix: resolve animation bug  
+
+   Adjusted transition timings in PlayerAnimator"
+
+7. Tips  
+   - Keep commit messages clean, readable, and useful.  
+   - Use imperative mood for short summary (e.g., "fix typo", "add feature").  
+   - Avoid vague messages like "update stuff".  
+   - **Never include tool-generated watermarks or unwanted messages in commits.**
+
+8. Branching / Switching / Merging Prompts  
+   - For **any operation** like creating a branch, switching branches, merging, etc., always:
+     → Show the planned command  
+     → Ask the user to **edit** or **accept** before executing
+
+     Example:
+     "You are about to run: `cm switch main`  
+     Do you want to proceed or edit the target branch? (edit/proceed/cancel)"
+
+9. Help  
+   Online docs:  
+   https://docs.unity.com/ugs/en-us/manual/devops/manual/uvcs-cli/version-control-cli  
+
+   Local CLI help:  
+   cm --help  
+   cm ci --help
