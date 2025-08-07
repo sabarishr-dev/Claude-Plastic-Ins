@@ -11,7 +11,7 @@ Claude AI Behavior
 - Build may take more than 5-10 hrs , so don't kill or exit the process
 
 
-0.Understand Process / help / Scripting Reference or API
+1.Understand Process / help / Scripting Reference or API
 
 using UnityEditor;
 using UnityEngine;
@@ -404,7 +404,7 @@ public class BuildParams
 
 
 
-Setup Instructions / Interaction flow
+2. Configure / Setup Instructions / Interaction flow
 
 🧩 Step 1: What is your Unity installation path?
 Example: C:/Program Files/Unity/Hub/Editor/2022.3.10f1/Editor/Unity.exe
@@ -486,6 +486,7 @@ Flag                       | Description                                     | E
 -zipbuild                  | Zip the build output.                           | *(optional flag)*
 -sendmail                  | Send email after build (script support needed). | *(optional flag)*
 -mailTo                    | Email to send the report to.                    | user@example.com
+
 
 
 
