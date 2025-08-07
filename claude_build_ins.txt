@@ -1,0 +1,491 @@
+Unity CLI Build Process — Claude Memory Ready
+------------------------------------------------
+
+Claude AI Behavior
+
+- If the build process is unclear, ask:
+
+  “Can you explain how your Unity build process works?”
+
+- Once the user confirms: Save the validated process to `user-buildprocess.md` and store in memory.
+- Build may take more than 5-10 hrs , so don't kill or exit the process
+
+
+0.Understand Process / help / Scripting Reference or API
+
+using UnityEditor;
+using UnityEngine;
+using System.Linq;
+using System.IO;
+using System;
+using UnityEditor.AddressableAssets.Settings;
+using UnityEditor.AddressableAssets;
+
+public static class BuildScript
+{
+    public static void Build()
+    {
+        BuildParams.ParseCommandLineArgs();
+        BuildParams.Instance.LogBuildConfiguration();
+
+        string platform = BuildParams.Instance.platform.ToLower();
+        switch (platform)
+        {
+            case "windows":
+                BuildForPlatform(BuildTarget.StandaloneWindows64, BuildParams.Instance.GetFullBuildPath(), "StandaloneWindows64");
+                break;
+            case "android":
+                BuildForPlatform(BuildTarget.Android, BuildParams.Instance.GetFullBuildPath(), "Android");
+                break;
+            case "webgl":
+                BuildForPlatform(BuildTarget.WebGL, BuildParams.Instance.GetFullBuildPath(), "WebGL");
+                break;
+            default:
+                Debug.LogError($"Unknown platform: {BuildParams.Instance.platform}");
+                break;
+        }
+    }
+
+    private static void BuildForPlatform(BuildTarget buildTarget, string buildPath, string platformName)
+    {
+        // 🔁 Force switch platform
+        SwitchActiveBuildTargetIfNeeded(buildTarget);
+
+        string[] scenes = GetEnabledScenes();
+        string startedAt = DateTime.UtcNow.ToString("o");
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        string buildDirectory = Path.GetDirectoryName(buildPath);
+        if (!Directory.Exists(buildDirectory))
+        {
+            Directory.CreateDirectory(buildDirectory);
+        }
+
+        string playerStatus = null;
+        float playerSizeMB = 0f;
+        string playerOutputPath = null;
+        double playerTime = 0;
+        string playerStartedAt = null;
+        string playerEndedAt = null;
+
+        string addressableStatus = null;
+        float addressableSizeMB = 0f;
+        string addressableOutputPath = null;
+        double addressableTime = 0;
+        string addressableStartedAt = null;
+        string addressableEndedAt = null;
+
+        // ▶️ Build Player
+        if (BuildParams.Instance.unityBuild)
+        {
+            PlayerSettings.bundleVersion = BuildParams.Instance.version;
+            playerStartedAt = DateTime.UtcNow.ToString("o");
+            var playerStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            BuildPlayerOptions buildPlayerOptions = new BuildPlayerOptions
+            {
+                scenes = scenes,
+                locationPathName = buildPath,
+                target = buildTarget,
+                options = BuildParams.Instance.GetBuildOptions()
+            };
+
+            var report = BuildPipeline.BuildPlayer(buildPlayerOptions);
+            var summary = report.summary;
+            playerStopwatch.Stop();
+            playerEndedAt = DateTime.UtcNow.ToString("o");
+
+            playerStatus = summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded ? "success" : "failure";
+            playerSizeMB = summary.totalSize / (1024f * 1024f);
+            playerOutputPath = Path.GetFullPath(buildDirectory);
+            playerTime = playerStopwatch.Elapsed.TotalSeconds;
+
+            Debug.Log($"Player build {playerStatus}: {summary.totalSize} bytes");
+
+            var playerReport = new BuildReport
+            {
+                reportType = "player",
+                status = playerStatus,
+                totalTime = playerTime,
+                totalSizeMB = playerSizeMB,
+                outputPath = playerOutputPath,
+                platform = platformName,
+                startedAt = playerStartedAt,
+                endedAt = playerEndedAt,
+                scenes = scenes
+            };
+
+            string url = BuildParams.Instance.postReportUrl;
+            if (!string.IsNullOrEmpty(url))
+            {
+                string json = JsonUtility.ToJson(playerReport);
+                BuildMail.PostBuildReport(url, json);
+            }
+        }
+        else
+        {
+            playerStatus = "skipped";
+        }
+
+        // 📦 Build Addressables
+        if (BuildParams.Instance.bundleBuild)
+        {
+            addressableStartedAt = DateTime.UtcNow.ToString("o");
+            var addrStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            try
+            {
+                AddressableAssetSettings.BuildPlayerContent();
+                addressableStatus = "success";
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("Addressables build failed: " + ex.Message);
+                addressableStatus = "failure";
+            }
+
+            string platformFolder = buildTarget.ToString(); // Correctly match the active target
+            string defaultAddressablePath = $"Library/com.unity.addressables/aa/{platformFolder}";
+            if (Directory.Exists(defaultAddressablePath))
+            {
+                addressableOutputPath = Path.GetFullPath(defaultAddressablePath);
+                addressableSizeMB = GetDirectorySize(defaultAddressablePath) / (1024f * 1024f);
+            }
+            else
+            {
+                addressableOutputPath = $"Not found: {defaultAddressablePath}";
+            }
+
+            addrStopwatch.Stop();
+            addressableEndedAt = DateTime.UtcNow.ToString("o");
+            addressableTime = addrStopwatch.Elapsed.TotalSeconds;
+
+            Debug.Log($"Addressables build {addressableStatus}: {addressableSizeMB} MB");
+
+            var bundleReport = new BundleReport
+            {
+                reportType = "addressable",
+                status = addressableStatus,
+                totalTime = addressableTime,
+                totalSizeMB = addressableSizeMB,
+                outputPath = addressableOutputPath,
+                platform = platformName,
+                startedAt = addressableStartedAt,
+                endedAt = addressableEndedAt
+            };
+
+            string url = BuildParams.Instance.postReportUrl;
+            if (!string.IsNullOrEmpty(url))
+            {
+                string json = JsonUtility.ToJson(bundleReport);
+                BuildMail.PostBuildReport(url, json);
+            }
+        }
+        else
+        {
+            addressableStatus = "skipped";
+        }
+
+        stopwatch.Stop();
+    }
+
+    private static void SwitchActiveBuildTargetIfNeeded(BuildTarget target)
+    {
+        BuildTargetGroup group = BuildPipeline.GetBuildTargetGroup(target);
+        if (EditorUserBuildSettings.activeBuildTarget != target)
+        {
+            Debug.Log($"Switching build target from {EditorUserBuildSettings.activeBuildTarget} to {target}");
+            EditorUserBuildSettings.SwitchActiveBuildTarget(group, target);
+        }
+    }
+
+    private static string[] GetEnabledScenes()
+    {
+        return EditorBuildSettings.scenes
+            .Where(scene => scene.enabled)
+            .Select(scene => scene.path)
+            .ToArray();
+    }
+
+    private static long GetDirectorySize(string path)
+    {
+        long size = 0;
+        try
+        {
+            foreach (string file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+            {
+                size += new FileInfo(file).Length;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error calculating directory size for {path}: {ex.Message}");
+        }
+        return size;
+    }
+
+    [System.Serializable]
+    public class BuildReport
+    {
+        public string reportType = "player";
+        public string status;
+        public double totalTime;
+        public float totalSizeMB;
+        public string outputPath;
+        public string platform;
+        public string startedAt;
+        public string endedAt;
+        public string[] scenes;
+    }
+
+    [System.Serializable]
+    public class BundleReport
+    {
+        public string reportType = "addressable";
+        public string status;
+        public double totalTime;
+        public float totalSizeMB;
+        public string outputPath;
+        public string platform;
+        public string startedAt;
+        public string endedAt;
+    }
+}
+
+
+
+using UnityEngine;
+using UnityEditor;
+using System;
+
+[System.Serializable]
+public class BuildParams
+{
+    [Header("Build Options")]
+    public bool unityBuild;
+    public bool bundleBuild;
+    public string version;
+
+    [Header("Paths")]
+    public string buildPath = ""; // Player build output path
+    public string buildName = "";
+
+    [Header("Build Options")]
+    public bool developmentBuild = false;
+    public bool allowDebugging = false;
+    public string platform = "Windows";
+
+    [Header("Post Build Options")]
+    public bool zipBuild = false;
+    public bool sendMail = false;
+    public string mailTo = "";
+    public string postReportUrl = "";
+
+    // Static instance for CLI access
+    private static BuildParams _instance;
+    public static BuildParams Instance
+    {
+        get
+        {
+            if (_instance == null)
+            {
+                _instance = new BuildParams();
+                // Initialize version from project settings
+                _instance.version = PlayerSettings.bundleVersion;
+            }
+            return _instance;
+        }
+    }
+
+    // CLI argument parsing with support for short and long flags
+    public static void ParseCommandLineArgs()
+    {
+        string[] args = Environment.GetCommandLineArgs();
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            string argLower = arg.ToLower();
+
+            switch (argLower)
+            {
+                case "-unitybuild":
+                case "-u":
+                    Instance.unityBuild = true;
+                    break;
+                case "-bundlebuild":
+                case "-b":
+                    Instance.bundleBuild = true;
+                    break;
+                case "-buildversion":
+                case "-bv":
+                    if (i + 1 < args.Length)
+                        Instance.version = args[++i];
+                    break;
+                case "-buildpath":
+                case "-bp":
+                    if (i + 1 < args.Length)
+                        Instance.buildPath = args[++i];
+                    break;
+                case "-developmentbuild":
+                case "-d":
+                    Instance.developmentBuild = true;
+                    break;
+                case "-allowdebugging":
+                case "-ad":
+                    Instance.allowDebugging = true;
+                    break;
+                case "-platform":
+                case "-p":
+                    if (i + 1 < args.Length)
+                        Instance.platform = args[++i];
+                    break;
+                case "-postreport":
+                case "-pr":
+                    if (i + 1 < args.Length)
+                        Instance.postReportUrl = args[++i];
+                    break;
+                case "-buildname":
+                case "-bn":
+                    if (i + 1 < args.Length)
+                        Instance.buildName = args[++i];
+                    break;
+            }
+        }
+    }
+
+    public string GetFullBuildPath()
+    {
+        string name = string.IsNullOrEmpty(buildName) ? "MyGame" : buildName;
+        if (!string.IsNullOrEmpty(buildPath))
+            return buildPath;
+        // Default based on platform
+        switch (platform.ToLower())
+        {
+            case "windows":
+                return $"Build/Windows/{name}.exe";
+            case "android":
+                return $"Build/Android/{name}.apk";
+            case "webgl":
+                return $"Build/WebGL/{name}";
+            default:
+                return $"Build/Output/{name}";
+        }
+    }
+
+    public BuildOptions GetBuildOptions()
+    {
+        BuildOptions options = BuildOptions.None;
+
+        if (developmentBuild)
+            options |= BuildOptions.Development;
+        if (allowDebugging)
+            options |= BuildOptions.AllowDebugging;
+
+        return options;
+    }
+
+    public void LogBuildConfiguration()
+    {
+        Debug.Log($"Build Configuration:");
+        Debug.Log($"Unity Build: {unityBuild}");
+        Debug.Log($"Bundle Build: {bundleBuild}");
+        Debug.Log($"Version: {version}");
+        Debug.Log($"Build Path: {GetFullBuildPath()}");
+        Debug.Log($"Platform: {platform}");
+        Debug.Log($"Development Build: {developmentBuild}");
+        Debug.Log($"Allow Debugging: {allowDebugging}");
+        Debug.Log($"Post Report URL: {postReportUrl}");
+    }
+}
+
+
+
+
+
+
+Setup Instructions / Interaction flow
+
+🧩 Step 1: What is your Unity installation path?
+Example: C:/Program Files/Unity/Hub/Editor/2022.3.10f1/Editor/Unity.exe
+
+> [User enters path]
+
+✅ Got it! Unity path verified.
+
+📁 Step 2: What is your Unity project path?
+> [User enters path]
+
+✅ Project path set.
+
+🔹 Step 3: Do you want to build the player? (yes/no)
+> yes
+
+📦 Step 4: Do you want to build addressables? (yes/no)
+> no
+
+🛠️ Step 5: What is the build platform? (Windows / Android / WebGL)
+> Android
+
+🏷️ Step 6: What is the build name?
+> DropsMetaverse
+
+📍 Step 7: Enter build output path (or press enter for default)
+> [blank]
+
+📍 Step 8: Enter addressables output path (or press enter for default)
+> [blank]
+
+🔖 Step 9: Enter build version (e.g. 1.0.0)
+> 1.11.56
+
+🐞 Step 10: Development build? (yes/no)
+> yes
+
+🧹 Step 11: Allow debugging? (yes/no)
+> yes
+
+🌐 Step 12: Post report URL (optional, press enter to skip)
+> http://localhost:3000/api/build-report
+
+📧 Step 13: Send email on build completion? (yes/no)
+> no
+
+Step 14: Save this configuration in project memory
+
+
+
+3. Command format ( should be single line ):
+
+a.use Git Bash inside a command like ( if bash not found , use ps or cmd ):
+	C:\Program Files\Git\bin\bash.exe -c "<UNITY_CLI_COMMAND>"
+b. unity path example ( C:/Program Files/Unity/Hub/Editor/<EDITOR_VERSION>/Editor/Unity.exe ) ( if not found, ask user to enter the custom location of unity path )
+
+  "[unityPath]/Unity.exe [params] -logfile -"
+
+(-logfile - streams log output live to the terminal) or ( ask user to save in log file ( if yes , create new log file in project directory and -logfile "<log path (absolute)>" ) )
+
+
+CLI Build Flags
+
+Flag                       | Description                                     | Example
+---------------------------|-------------------------------------------------|-------------------------------------------
+-batchmode -quit           | Run Unity in headless mode and exit.            | *(always use)*
+-projectPath               | Path to Unity project.                          | "D:/Unity/MyGame"
+-executeMethod             | C# static build entry point.                    | BuildScript.Build
+-unitybuild or -u          | Perform Unity player executable build.          | *(flag only)*
+-bundlebuild or -b         | Perform Addressables/asset bundle build.        | *(flag only)*
+-platform or -p            | Build platform.                                 | Windows, Android, WebGL
+-buildname or -bn          | Output base name for builds.                    | MyGame
+-buildpath or -bp          | Player build output path.                       | Build/Windows/MyGame.exe
+-bundlepath or -bbp        | Addressables output path.                       | Build/Windows/MyGame_Addressables
+-buildversion or -bv             | Build version.                                  | 1.2.3
+-developmentbuild or -d    | Development mode (includes debug symbols).      | *(flag only)*
+-allowdebugging or -ad     | Allow debugging.                                | *(flag only)*
+-postreport or -pr         | Webhook URL for build report.                   | https://your-endpoint.com
+-zipbuild                  | Zip the build output.                           | *(optional flag)*
+-sendmail                  | Send email after build (script support needed). | *(optional flag)*
+-mailTo                    | Email to send the report to.                    | user@example.com
+
+
+
